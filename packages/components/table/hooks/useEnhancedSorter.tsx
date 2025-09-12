@@ -1,12 +1,17 @@
 import { SetupContext, computed, toRefs, ref, watch } from 'vue';
 import { isArray, isFunction } from 'lodash-es';
-import { SortInfo, TdPrimaryTableProps, PrimaryTableCol, TableRowData } from '../type';
+import { SortInfo, TdEnhancedTableProps, PrimaryTableCol, TableRowData, SortOptions } from '../type';
 import SorterButton from '../components/sorter-button';
 import { useDefaultValue } from '@tdesign/shared-hooks';
+import { TreeDataSorter } from './useTreeSorter';
 
 export type SortMap = Record<string, SortInfo & { index: number }>;
 
-export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupContext) {
+/**
+ * Enhanced Table 专用排序器 - 遵循单一职责原则
+ * 只处理树形数据相关的排序逻辑
+ */
+export default function useEnhancedSorter(props: TdEnhancedTableProps, { slots }: SetupContext) {
   const { sort, data } = toRefs(props);
   const originalData = ref();
   const [tSortInfo, setTSortInfo] = useDefaultValue(sort, props.defaultSort, props.onSortChange, 'sort');
@@ -14,6 +19,28 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
   // 本地数据排序：用于记录哪些字段是自定义排序函数
   const sorterFuncMap = computed(() => getSorterFuncMap(props.columns));
   const innerSort = ref<SortInfo | SortInfo[]>();
+
+  // 🎯 检测是否为树形数据
+  const isTreeData = computed(() => Boolean(props.tree && Object.keys(props.tree).length));
+
+  // 🎯 树形排序配置
+  const treeConfig = computed(() => {
+    if (!props.tree) return null;
+    return {
+      sortLevel: props.tree.sortLevel || 'same-level',
+      keepTreeStructure: props.tree.keepTreeStructure ?? true,
+      childrenKey: props.tree.childrenKey || 'children',
+    };
+  });
+
+  // 🎯 树形数据排序器（懒加载）
+  let treeSorter: TreeDataSorter | null = null;
+  const getTreeSorter = () => {
+    if (!treeSorter && isTreeData.value && treeConfig.value) {
+      treeSorter = new TreeDataSorter(props.columns, treeConfig.value);
+    }
+    return treeSorter;
+  };
 
   const sortArray = computed<Array<SortInfo>>(() => {
     const sort = tSortInfo.value;
@@ -34,7 +61,6 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
     for (let i = 0, len = columns.length; i < len; i++) {
       const col = columns[i];
       if (isFunction(col.sorter)) {
-        // eslint-disable-next-line no-param-reassign
         map[col.colKey] = col.sorter;
       }
       // 多级表头中的排序功能
@@ -45,40 +71,54 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
     return map;
   }
 
+  // 🎯 统一的数据排序处理 - 支持树形和普通数据
   function handleDataSort(sortInfo: SortInfo | Array<SortInfo>) {
     const sort = sortInfo;
-    if (!Object.keys(sorterFuncMap.value).length) return;
     if (!originalData.value) {
       originalData.value = tData.value;
     }
+
     const isEmptyArraySort = !sort || (sort instanceof Array && !sort.length);
     const isEmptyObjectSort = !(sort instanceof Array) && !sort?.sortBy;
     if (isEmptyArraySort || isEmptyObjectSort) {
       setTData(originalData.value, { trigger: 'sort' });
       return originalData.value;
     }
-    const formattedSort = sort instanceof Array ? sort : [sort];
-    // data 为受控属性，data.slice() 浅拷贝，防止 sort 导致原数据变异
-    const newData: TableRowData[] = tData.value.slice().sort((a: TableRowData, b: TableRowData) => {
-      let sortResult = 0;
-      for (let i = 0, len = formattedSort.length; i < len; i++) {
-        const item = formattedSort[i];
-        const sortFunc = sorterFuncMap.value[item.sortBy];
-        // 上一个排序字段值相同时才会进行下一个字段的大小对比
-        if (sortResult === 0 && sortFunc) {
-          sortResult = item.descending ? sortFunc(b, a) : sortFunc(a, b);
-        } else {
-          break;
+
+    let newData: TableRowData[];
+
+    if (isTreeData.value) {
+      // 🎯 树形数据排序
+      const sorter = getTreeSorter();
+      newData = sorter?.sortTreeData(tData.value, sort) || tData.value;
+    } else {
+      // 🎯 平铺数据排序（原有逻辑）
+      if (!Object.keys(sorterFuncMap.value).length) return;
+      const formattedSort = sort instanceof Array ? sort : [sort];
+      // data 为受控属性，data.slice() 浅拷贝，防止 sort 导致原数据变异
+      newData = tData.value.slice().sort((a: TableRowData, b: TableRowData) => {
+        let sortResult = 0;
+        for (let i = 0, len = formattedSort.length; i < len; i++) {
+          const item = formattedSort[i];
+          const sortFunc = sorterFuncMap.value[item.sortBy];
+          // 上一个排序字段值相同时才会进行下一个字段的大小对比
+          if (sortResult === 0 && sortFunc) {
+            sortResult = item.descending ? sortFunc(b, a) : sortFunc(a, b);
+          } else {
+            break;
+          }
         }
-      }
-      return sortResult;
-    });
+        return sortResult;
+      });
+    }
+
     // Data 变化返回的是数据引用，为避免死循环，特此检测排序数据前后是否相同，如果相同则不再触发事件
     if (JSON.stringify(newData) === JSON.stringify(tData.value)) return;
     setTData(newData, { trigger: 'sort' });
     return newData;
   }
 
+  // 🎯 统一的排序头部点击处理
   function handleSortHeaderClick(col: PrimaryTableCol<TableRowData>, p: { descending: boolean }) {
     let sortInfo: SortInfo | Array<SortInfo>;
     if (props.multipleSort) {
@@ -92,7 +132,22 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
     const newData = handleDataSort(sortInfo);
     const currentData = newData || tData.value;
     const currentDataSource = currentData;
-    setTSortInfo(sortInfo, { currentDataSource, col });
+
+    // 🎯 创建增强的回调选项
+    const sortOptions: SortOptions<TableRowData> = {
+      currentDataSource,
+      col,
+      ...(isTreeData.value && treeConfig.value
+        ? {
+            isTreeData: true,
+            sortLevel: treeConfig.value.sortLevel,
+            originalDataSource: originalData.value,
+          }
+        : {}),
+    };
+
+    // 🎯 调用用户回调，传递增强信息
+    setTSortInfo(sortInfo, sortOptions);
     props.onChange?.({ sorter: sortInfo }, { currentData, trigger: 'sorter' });
     innerSort.value = sortInfo;
   }
@@ -152,7 +207,6 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
     const tmpSortInfo = isArray(a) ? a : [a];
     const tmpInnerSortInfo = isArray(b) ? b : [b];
     if (tmpSortInfo.length && !b) return false;
-    // eslint-disable-next-line
     for (let i = 0, len = tmpSortInfo.length; i < len; i++) {
       const item = tmpSortInfo[i];
       const result = tmpInnerSortInfo.find((t) => t.sortBy === item.sortBy);
@@ -179,5 +233,20 @@ export default function useSorter(props: TdPrimaryTableProps, { slots }: SetupCo
 
   return {
     renderSortIcon,
+    // 🎯 暴露统一的排序处理
+    handleSortHeaderClick,
+    // 🎯 树形数据专用方法
+    ...(isTreeData.value && treeConfig.value
+      ? {
+          setSortLevel: (level: 'all' | 'same-level' | 'root-only') => {
+            const sorter = getTreeSorter();
+            sorter?.updateConfig({ sortLevel: level });
+          },
+          updateTreeConfig: (config: Partial<typeof treeConfig.value>) => {
+            const sorter = getTreeSorter();
+            sorter?.updateConfig(config);
+          },
+        }
+      : {}),
   };
 }

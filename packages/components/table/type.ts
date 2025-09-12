@@ -1024,6 +1024,16 @@ export interface TableTreeConfig {
    * @default 0
    */
   treeNodeColumnIndex?: number;
+  /**
+   * 树形数据排序级别
+   * @default same-level
+   */
+  sortLevel?: 'all' | 'same-level' | 'root-only';
+  /**
+   * 是否保持树形结构（仅在 sortLevel 为 'all' 时有效）
+   * @default true
+   */
+  keepTreeStructure?: boolean;
 }
 
 export type TableRowAttributes<T> =
@@ -1204,6 +1214,11 @@ export interface SelectOptions<T> {
 export interface SortOptions<T> {
   currentDataSource?: Array<T>;
   col: PrimaryTableCol;
+  
+  // 🎯 树形排序增强信息
+  isTreeData?: boolean;
+  sortLevel?: 'all' | 'same-level' | 'root-only';
+  originalDataSource?: Array<T>;
 }
 
 export interface PrimaryTableValidateContext {

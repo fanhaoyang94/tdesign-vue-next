@@ -255,7 +255,8 @@ export default defineComponent({
           const titleContent = renderTitle(context.slots, item, i);
           const { ellipsisTitle } = item;
           item.title = (h, p) => {
-            const sortIcon = item.sorter ? renderSortIcon(p) : null;
+            // 🎯 优先使用插槽中的排序图标渲染器，如果没有则使用本地的
+            const sortIcon = item.sorter ? context.slots.sortIcon?.(p) || renderSortIcon(p) : null;
             const filterIcon = item.filter ? renderFilterIcon(p) : null;
             // @ts-ignore 注意：此处 Vue2 和 Vue3 有所不同
             const attach = primaryTableRef.value?.tableContentRef;

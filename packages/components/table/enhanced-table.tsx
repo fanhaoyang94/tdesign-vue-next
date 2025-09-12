@@ -13,6 +13,7 @@ import {
 } from './type';
 import useTreeData from './hooks/useTreeData';
 import useTreeSelect from './hooks/useTreeSelect';
+import useEnhancedSorter from './hooks/useEnhancedSorter';
 import { get } from 'lodash-es';
 import { ComponentScrollToElementParams } from '../common';
 import log from '@tdesign/common-js/log/index';
@@ -34,6 +35,9 @@ export default defineComponent({
     const treeDataMap = ref(store.value.treeDataMap);
 
     const { tIndeterminateSelectedRowKeys, onInnerSelectChange } = useTreeSelect(props, treeDataMap);
+
+    // 🎯 Enhanced Table 专用排序器 - 遵循单一职责原则
+    const { renderSortIcon } = useEnhancedSorter(props, context);
 
     // 影响列和单元格内容的因素有：树形节点需要添加操作符 [+] [-]
     const getColumns = (columns: PrimaryTableCol<TableRowData>[]) => {
@@ -149,8 +153,15 @@ export default defineComponent({
       if (props.tree?.expandTreeNodeOnClick) {
         enhancedProps.onRowClick = onEnhancedTableRowClick;
       }
+
+      // 🎯 为 PrimaryTable 注入 Enhanced 的排序渲染器
+      const enhancedSlots = {
+        ...context.slots,
+        sortIcon: renderSortIcon,
+      };
+
       // @ts-ignore ref 顺序很重要，如果移动到 v-slots 前面，会让 EnhancedTable 所有实例方法失效，勿动
-      return <PrimaryTable v-slots={context.slots} {...enhancedProps} ref={primaryTableRef} />;
+      return <PrimaryTable v-slots={enhancedSlots} {...enhancedProps} ref={primaryTableRef} />;
     };
   },
 });
